@@ -1,31 +1,32 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data.Common;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace SqlVault
 {
-    public sealed class SqlVault
+    public sealed partial class SqlVault
     {
-        private static readonly string ParamContextKey = "@ContextKey";
-        private static readonly string ParamElementKey = "@ElementKey";
-        private static readonly string ParamValue = "@Value";
-        private static readonly string SqlCreateTablePostgreSQL = "CREATE TABLE IF NOT EXISTS {0}({1} INTEGER, {2} INTEGER, {3} TEXT, PRIMARY KEY({1}, {2}));";
-        private static readonly string SqlCreateTableSQLServer = "CREATE TABLE IF NOT EXISTS {0}({1} INTEGER, {2} INTEGER, {3} NVARCHAR(MAX), PRIMARY KEY({1}, {2}));";
-        private static readonly string SqlCreateTableMySQL = "CREATE TABLE IF NOT EXISTS {0}({1} INTEGER, {2} INTEGER, {3} TEXT, PRIMARY KEY({1}, {2}));";
-        private static readonly string SqlSelectAllFormat = "SELECT * FROM {0}";
-        private static readonly string SqlSelectFormat = "SELECT * FROM {0} WHERE {1}=" + ParamContextKey + " AND {2}=" + ParamElementKey;
-        private static readonly string SqlInsertFormat = "INSERT INTO {0}({1}, {2}, {3}) VALUES(" + ParamContextKey + ", " + ParamElementKey + ", " + ParamValue + ")";
-        private static readonly string SqlUpdateFormat = "UPDATE {0} SET {1}=" + ParamContextKey + ", {2}=" + ParamElementKey + ", {3}=" + ParamValue +
-            " WHERE {1}=" + ParamContextKey + " AND {2}=" + ParamElementKey;
-        private readonly Func<DbConnection> _connectionFactory;
+        private readonly DbConnector _connector;
         private readonly SqlVaultConfig _config;
         private readonly object _contextRecordsLock = new object();
         private readonly IDictionary<int, ContextRecord> _contextRecords = new Dictionary<int, ContextRecord>();
         private readonly object _loadLock = new object();
         private SqlVaultLoadState _loadState = SqlVaultLoadState.NotLoaded;
 
-        public IDictionary<int, ContextRecord> ContextRecords
+        public SqlVaultLoadState LoadState
+        {
+            get
+            {
+                lock (_loadLock)
+                {
+                    return _loadState;
+                }
+            }
+        }
+
+        private IDictionary<int, ContextRecord> ContextRecords
         {
             get
             {
@@ -36,39 +37,37 @@ namespace SqlVault
             }
         }
 
-        public SqlVault(Func<DbConnection> connectionFactory, SqlVaultConfig config)
+        public SqlVault(DbConnector connector, SqlVaultConfig config)
         {
-            _connectionFactory = connectionFactory ?? throw new ArgumentNullException(nameof(connectionFactory));
+            _connector = connector ?? throw new ArgumentNullException(nameof(connector));
             _config = config ?? throw new ArgumentNullException(nameof(config));
         }
 
-        public async Task CreateTableIfNotExists()
+        public async Task Initialize(InitOption option)
         {
-            using (var conn = _connectionFactory())
+            if (option.HasFlag(InitOption.DropTableIfExists))
             {
-                conn.Open();
-                string commandText = null;
-                switch (_config.Server)
+                using (var conn = _connector())
                 {
-                    case DbServer.PostgreSQL:
-                        commandText = SqlCreateTablePostgreSQL;
-                        break;
-                    case DbServer.SQLServer:
-                        commandText = SqlCreateTableSQLServer;
-                        break;
-                    case DbServer.MySQL:
-                        commandText = SqlCreateTableMySQL;
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException(nameof(_config.Server));
+                    conn.Open();
+                    var cmd = conn.CreateCommand();
+                    cmd.CommandText = string.Format(SqlDropTable, _config.TableName);
+                    await cmd.ExecuteNonQueryAsync();
                 }
-                var cmd = conn.CreateCommand();
-                cmd.CommandText = string.Format(commandText, _config.TableName, _config.ContextKeyColumn, _config.ElementKeyColumn, _config.ValueColumn);
-                await cmd.ExecuteNonQueryAsync();
+            }
+
+            if (option.HasFlag(InitOption.CreateTableIfNotExists))
+            {
+                await CreateTableIfNotExists();
+            }
+
+            if (option.HasFlag(InitOption.LoadData))
+            {
+                await Load();
             }
         }
 
-        public async Task Save(int contextKey, int elementKey, string value)
+        public async Task SaveValue(int contextKey, int elementKey, string value)
         {
             lock (_loadLock)
             {
@@ -78,7 +77,7 @@ namespace SqlVault
                 }
             }
 
-            using (var conn = _connectionFactory())
+            using (var conn = _connector())
             {
                 await conn.OpenAsync();
 
@@ -134,6 +133,34 @@ namespace SqlVault
             }
         }
 
+        public async Task SaveFromFile(int contextKey, int elementKey, string filePath)
+        {
+            using (var reader = File.OpenText(filePath))
+            {
+                var value = await reader.ReadToEndAsync();
+                await SaveValue(contextKey, elementKey, value);
+            }
+        }
+
+        public bool TryGetValue(int contextKey, int elementKey, out string value)
+        {
+            ContextRecord context = null;
+            if (ContextRecords.TryGetValue(contextKey, out context))
+            {
+                if (context.Elements.TryGetValue(elementKey, out value))
+                {
+                    return true;
+                }
+            }
+            value = null;
+            return false;
+        }
+
+        public string GetValue(int contextKey, int elementKey)
+        {
+            return ContextRecords[contextKey].Elements[elementKey];
+        }
+
         public async Task Load()
         {
             lock (_loadLock)
@@ -165,7 +192,7 @@ namespace SqlVault
 
         private async Task LoadInner()
         {
-            using (var conn = _connectionFactory())
+            using (var conn = _connector())
             {
                 conn.Open();
                 var command = conn.CreateCommand();
@@ -193,6 +220,32 @@ namespace SqlVault
                         }
                     }
                 }
+            }
+        }
+
+        private async Task CreateTableIfNotExists()
+        {
+            using (var conn = _connector())
+            {
+                conn.Open();
+                string commandText = null;
+                switch (_config.Server)
+                {
+                    case DbServer.PostgreSQL:
+                        commandText = SqlCreateTablePostgreSQL;
+                        break;
+                    case DbServer.SQLServer:
+                        commandText = SqlCreateTableSQLServer;
+                        break;
+                    case DbServer.MySQL:
+                        commandText = SqlCreateTableMySQL;
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(_config.Server));
+                }
+                var cmd = conn.CreateCommand();
+                cmd.CommandText = string.Format(commandText, _config.TableName, _config.ContextKeyColumn, _config.ElementKeyColumn, _config.ValueColumn);
+                await cmd.ExecuteNonQueryAsync();
             }
         }
 
