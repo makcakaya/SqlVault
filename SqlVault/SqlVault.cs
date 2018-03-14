@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace SqlVault
 {
-    public sealed partial class SqlVault
+    public sealed partial class SqlVault : IReadonlySqlVault
     {
         private readonly DbConnector _connector;
         private readonly SqlVaultConfig _config;
@@ -140,6 +140,16 @@ namespace SqlVault
                 var value = await reader.ReadToEndAsync();
                 await SaveValue(contextKey, elementKey, value);
             }
+        }
+
+        public bool ContainsContext(int contextKey)
+        {
+            return ContextRecords.ContainsKey(contextKey);
+        }
+
+        public IDictionary<int, string> GetContextElements(int contextKey)
+        {
+            return ContextRecords[contextKey].Elements;
         }
 
         public bool TryGetValue(int contextKey, int elementKey, out string value)

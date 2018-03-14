@@ -2,11 +2,13 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-    <Version>0.0.1</Version>
+    <Version>0.0.2</Version>
     <Authors>Mert Akcakaya</Authors>
     <PackageTags>sql, file, storage, query, database</PackageTags>
     <PackageProjectUrl>https://github.com/makcakaya/SqlVault</PackageProjectUrl>
     <RepositoryUrl>https://github.com/makcakaya/SqlVault</RepositoryUrl>
+    <Description>Where to put your SQL queries? Well, put them in a database.</Description>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 
 </Project>
